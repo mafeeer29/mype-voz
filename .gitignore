@@ -1,2 +1,28 @@
+# Frontend
 node_modules/
+frontend/node_modules/
+frontend/dist/
+
+# Variables de entorno
 .env
+.env.*
+!.env.example
+
+# Python
+venv/
+backend/venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Base de datos local
+*.db
+*.sqlite
+*.sqlite3
+
+# Sistema y editores
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
