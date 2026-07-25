@@ -7,6 +7,7 @@ import { RegisterPage } from "./pages/RegisterPage";
 import { InventoryPage } from "./pages/InventoryPage";
 import { DebtsPage } from "./pages/DebtsPage";
 import { AssistantPage } from "./pages/AssistantPage";
+import { HistoryPage } from "./pages/HistoryPage";
 
 export default function App() {
   return (
@@ -21,6 +22,7 @@ export default function App() {
                 <Route path="/registrar" element={<RegisterPage />} />
                 <Route path="/inventario" element={<InventoryPage />} />
                 <Route path="/deudas" element={<DebtsPage />} />
+                <Route path="/historial" element={<HistoryPage />} />
                 <Route path="/asistente" element={<AssistantPage />} />
               </Routes>
             </main>

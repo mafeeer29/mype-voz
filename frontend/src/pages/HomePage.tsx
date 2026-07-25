@@ -8,6 +8,7 @@ import {
   HandCoins,
   Coins,
   AlertTriangle,
+  History,
 } from "lucide-react";
 
 import { PageContainer } from "../components/layout/PageContainer";
@@ -282,6 +283,16 @@ export function HomePage() {
         >
           <PlusCircle size={22} />
           Registrar operación
+        </Button>
+
+        <Button
+          variant="outline"
+          size="lg"
+          fullWidth
+          onClick={() => navigate("/historial")}
+        >
+          <History size={20} />
+          Ver historial
         </Button>
       </div>
     </PageContainer>
