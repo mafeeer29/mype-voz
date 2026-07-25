@@ -238,6 +238,17 @@ class OperationResponse(BaseModel):
     registrado_por: str | None = None
     fecha: str
 
+class BusinessSummaryResponse(BaseModel):
+    ventas_totales: float
+    gastos_totales: float
+    compras_mercaderia: float
+    pagos_deuda_recibidos: float
+    deudas_pendientes: float
+    productos_stock_bajo: int
+    productos_agotados: int
+    total_caja: float
+    caja_por_metodo: dict[str, float]
+
 
 class ConfirmOperationResponse(BaseModel):
     mensaje: str
@@ -1090,3 +1101,95 @@ def obtener_operaciones(
         )
         for operacion in operaciones
     ]
+
+
+@app.get(
+    "/api/resumen",
+    response_model=BusinessSummaryResponse,
+)
+def obtener_resumen_negocio(
+    db: Session = Depends(get_db),
+):
+    operaciones = db.query(models.Operation).all()
+
+    ventas_totales = sum(
+        operacion.amount
+        for operacion in operaciones
+        if operacion.operation_type in {
+            "venta",
+            "venta_fiada",
+        }
+    )
+
+    gastos_totales = sum(
+        operacion.amount
+        for operacion in operaciones
+        if operacion.operation_type == "gasto"
+    )
+
+    compras_mercaderia = sum(
+        operacion.amount
+        for operacion in operaciones
+        if operacion.operation_type == "compra_mercaderia"
+    )
+
+    pagos_deuda_recibidos = sum(
+        operacion.amount
+        for operacion in operaciones
+        if operacion.operation_type == "pago_deuda"
+    )
+
+    deudas_pendientes = sum(
+        deuda.pending_balance
+        for deuda in db.query(models.Debt).all()
+        if deuda.pending_balance > 0
+    )
+
+    productos = (
+        db.query(models.Product)
+        .filter(models.Product.active.is_(True))
+        .all()
+    )
+
+    productos_stock_bajo = sum(
+        1
+        for producto in productos
+        if (
+            producto.current_stock > 0
+            and producto.current_stock
+            <= producto.minimum_stock
+        )
+    )
+
+    productos_agotados = sum(
+        1
+        for producto in productos
+        if producto.current_stock <= 0
+    )
+
+    metodos_pago = [
+        "efectivo",
+        "yape",
+        "plin",
+        "tarjeta",
+        "transferencia",
+    ]
+
+    caja_por_metodo = {
+        metodo: obtener_saldo_caja(db, metodo)
+        for metodo in metodos_pago
+    }
+
+    total_caja = sum(caja_por_metodo.values())
+
+    return BusinessSummaryResponse(
+        ventas_totales=ventas_totales,
+        gastos_totales=gastos_totales,
+        compras_mercaderia=compras_mercaderia,
+        pagos_deuda_recibidos=pagos_deuda_recibidos,
+        deudas_pendientes=deudas_pendientes,
+        productos_stock_bajo=productos_stock_bajo,
+        productos_agotados=productos_agotados,
+        total_caja=total_caja,
+        caja_por_metodo=caja_por_metodo,
+    )
