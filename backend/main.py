@@ -250,6 +250,15 @@ class BusinessSummaryResponse(BaseModel):
     caja_por_metodo: dict[str, float]
 
 
+class NaturalQueryRequest(BaseModel):
+    pregunta: str = Field(min_length=1)
+
+
+class NaturalQueryResponse(BaseModel):
+    respuesta: str
+    tipo_consulta: str
+
+
 class ConfirmOperationResponse(BaseModel):
     mensaje: str
     inventario: list[InventoryEffect]
@@ -320,6 +329,26 @@ def obtener_saldo_deuda(
         for deuda in deudas
     )
 
+def normalizar_texto(texto: str) -> str:
+    reemplazos = {
+        "á": "a",
+        "é": "e",
+        "í": "i",
+        "ó": "o",
+        "ú": "u",
+        "ü": "u",
+        "ñ": "n",
+    }
+
+    texto_normalizado = texto.lower().strip()
+
+    for original, reemplazo in reemplazos.items():
+        texto_normalizado = texto_normalizado.replace(
+            original,
+            reemplazo,
+        )
+
+    return texto_normalizado
 
 # -----------------------------
 # Rutas generales
@@ -1192,4 +1221,285 @@ def obtener_resumen_negocio(
         productos_agotados=productos_agotados,
         total_caja=total_caja,
         caja_por_metodo=caja_por_metodo,
+    )
+
+
+@app.post(
+    "/api/consultar",
+    response_model=NaturalQueryResponse,
+)
+def consultar_negocio(
+    consulta: NaturalQueryRequest,
+    db: Session = Depends(get_db),
+):
+    pregunta = normalizar_texto(
+        consulta.pregunta
+    )
+
+    operaciones = db.query(
+        models.Operation
+    ).all()
+
+    # -----------------------------
+    # Consulta sobre ventas
+    # -----------------------------
+
+    if any(
+        palabra in pregunta
+        for palabra in [
+            "vendimos",
+            "ventas",
+            "venta total",
+            "cuanto se vendio",
+        ]
+    ):
+        ventas_totales = sum(
+            operacion.amount
+            for operacion in operaciones
+            if operacion.operation_type in {
+                "venta",
+                "venta_fiada",
+            }
+        )
+
+        return NaturalQueryResponse(
+            respuesta=(
+                f"Las ventas registradas suman "
+                f"S/ {ventas_totales:.2f}."
+            ),
+            tipo_consulta="ventas_totales",
+        )
+
+    # -----------------------------
+    # Consulta sobre gastos
+    # -----------------------------
+
+    if any(
+        palabra in pregunta
+        for palabra in [
+            "gastamos",
+            "gastos",
+            "cuanto se gasto",
+            "egresos",
+        ]
+    ):
+        gastos_totales = sum(
+            operacion.amount
+            for operacion in operaciones
+            if operacion.operation_type == "gasto"
+        )
+
+        return NaturalQueryResponse(
+            respuesta=(
+                f"Los gastos registrados suman "
+                f"S/ {gastos_totales:.2f}."
+            ),
+            tipo_consulta="gastos_totales",
+        )
+
+    # -----------------------------
+    # Consulta sobre caja
+    # -----------------------------
+
+    if any(
+        palabra in pregunta
+        for palabra in [
+            "caja",
+            "dinero disponible",
+            "cuanto dinero hay",
+            "saldo disponible",
+        ]
+    ):
+        metodos = [
+            "efectivo",
+            "yape",
+            "plin",
+            "tarjeta",
+            "transferencia",
+        ]
+
+        caja_por_metodo = {
+            metodo: obtener_saldo_caja(
+                db,
+                metodo,
+            )
+            for metodo in metodos
+        }
+
+        total_caja = sum(
+            caja_por_metodo.values()
+        )
+
+        detalle = ", ".join(
+            (
+                f"{metodo.capitalize()}: "
+                f"S/ {saldo:.2f}"
+            )
+            for metodo, saldo
+            in caja_por_metodo.items()
+        )
+
+        return NaturalQueryResponse(
+            respuesta=(
+                f"Hay S/ {total_caja:.2f} "
+                f"en caja. {detalle}."
+            ),
+            tipo_consulta="caja",
+        )
+
+    # -----------------------------
+    # Consulta sobre deudas
+    # -----------------------------
+
+    if any(
+        palabra in pregunta
+        for palabra in [
+            "deudas",
+            "fiados",
+            "cuanto deben",
+            "por cobrar",
+        ]
+    ):
+        deudas = (
+            db.query(models.Debt)
+            .filter(
+                models.Debt.pending_balance > 0
+            )
+            .all()
+        )
+
+        total_deudas = sum(
+            deuda.pending_balance
+            for deuda in deudas
+        )
+
+        if not deudas:
+            return NaturalQueryResponse(
+                respuesta=(
+                    "No hay deudas pendientes."
+                ),
+                tipo_consulta="deudas_pendientes",
+            )
+
+        detalle = ", ".join(
+            (
+                f"{deuda.customer_name}: "
+                f"S/ {deuda.pending_balance:.2f}"
+            )
+            for deuda in deudas
+        )
+
+        return NaturalQueryResponse(
+            respuesta=(
+                f"Hay S/ {total_deudas:.2f} "
+                f"por cobrar. {detalle}."
+            ),
+            tipo_consulta="deudas_pendientes",
+        )
+
+    # -----------------------------
+    # Consulta sobre productos agotados
+    # -----------------------------
+
+    if any(
+        palabra in pregunta
+        for palabra in [
+            "agotados",
+            "sin stock",
+            "no queda",
+            "se acabaron",
+        ]
+    ):
+        productos = (
+            db.query(models.Product)
+            .filter(
+                models.Product.active.is_(True),
+                models.Product.current_stock <= 0,
+            )
+            .all()
+        )
+
+        if not productos:
+            return NaturalQueryResponse(
+                respuesta=(
+                    "No hay productos agotados."
+                ),
+                tipo_consulta="productos_agotados",
+            )
+
+        nombres = ", ".join(
+            producto.name
+            for producto in productos
+        )
+
+        return NaturalQueryResponse(
+            respuesta=(
+                f"Los productos agotados son: "
+                f"{nombres}."
+            ),
+            tipo_consulta="productos_agotados",
+        )
+
+    # -----------------------------
+    # Consulta sobre stock bajo
+    # -----------------------------
+
+    if any(
+        palabra in pregunta
+        for palabra in [
+            "stock bajo",
+            "queda poco",
+            "poco stock",
+            "productos bajos",
+            "reponer",
+        ]
+    ):
+        productos = (
+            db.query(models.Product)
+            .filter(
+                models.Product.active.is_(True),
+                models.Product.current_stock > 0,
+                (
+                    models.Product.current_stock
+                    <= models.Product.minimum_stock
+                ),
+            )
+            .all()
+        )
+
+        if not productos:
+            return NaturalQueryResponse(
+                respuesta=(
+                    "No hay productos con stock bajo."
+                ),
+                tipo_consulta="stock_bajo",
+            )
+
+        detalle = ", ".join(
+            (
+                f"{producto.name}: "
+                f"{producto.current_stock:g} unidades"
+            )
+            for producto in productos
+        )
+
+        return NaturalQueryResponse(
+            respuesta=(
+                f"Los productos con stock bajo son: "
+                f"{detalle}."
+            ),
+            tipo_consulta="stock_bajo",
+        )
+
+    # -----------------------------
+    # Consulta no reconocida
+    # -----------------------------
+
+    return NaturalQueryResponse(
+        respuesta=(
+            "Todavía no pude identificar la consulta. "
+            "Puedes preguntar por ventas, gastos, caja, "
+            "deudas, productos agotados o stock bajo."
+        ),
+        tipo_consulta="no_reconocida",
     )
