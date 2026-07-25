@@ -3,7 +3,7 @@ import { Mic, Sparkles, ShoppingCart, Wallet, HandCoins } from "lucide-react";
 import { Button } from "../common/Button";
 import { useApp } from "../../context/AppContext";
 import { examplePhrases } from "../../data/mockData";
-import { mockInterpretedOperation } from "../../data/mockData";
+import { interpretarOperacion } from "../../services/api";
 import type { InterpretedOperation, OperationType } from "../../types/operation";
 
 interface OperationFormProps {
@@ -27,20 +27,25 @@ export function OperationForm({ onInterpreted }: OperationFormProps) {
   const [error, setError] = useState<string | null>(null);
   const [recording, setRecording] = useState(false);
 
-  const handleInterpret = () => {
+  const handleInterpret = async () => {
     if (!text.trim()) {
       setError("Escribe o dicta qué quieres registrar.");
       return;
     }
     setError(null);
     setLoading(true);
-    setTimeout(() => {
+    try {
+      const { operacion } = await interpretarOperacion(text, activePerson);
+      onInterpreted(operacion);
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "No se pudo interpretar la operación.",
+      );
+    } finally {
       setLoading(false);
-      onInterpreted({
-        ...mockInterpretedOperation,
-        registrado_por: activePerson,
-      });
-    }, 900);
+    }
   };
 
   const toggleMic = () => {
@@ -160,7 +165,7 @@ export function OperationForm({ onInterpreted }: OperationFormProps) {
                 onClick={() => setText(phrase)}
                 className="text-left text-sm text-ink-soft hover:text-primary-700 w-full"
               >
-                “{phrase}”
+                "{phrase}"
               </button>
             </li>
           ))}

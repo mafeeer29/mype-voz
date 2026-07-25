@@ -12,6 +12,7 @@ interface OperationConfirmationProps {
   operation: InterpretedOperation;
   onCancel: () => void;
   onConfirm: (op: InterpretedOperation) => void;
+  confirming?: boolean;
 }
 
 const operationLabels: Record<string, string> = {
@@ -36,6 +37,7 @@ export function OperationConfirmation({
   operation,
   onCancel,
   onConfirm,
+  confirming = false,
 }: OperationConfirmationProps) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<InterpretedOperation>(operation);
@@ -150,21 +152,23 @@ export function OperationConfirmation({
       </div>
 
       <div className="flex gap-3">
-        <Button variant="outline" fullWidth onClick={onCancel}>
+        <Button variant="outline" fullWidth onClick={onCancel} disabled={confirming}>
           Cancelar
         </Button>
         <Button
           variant="ghost"
           fullWidth
           onClick={() => setEditing(true)}
+          disabled={confirming}
         >
           Editar
         </Button>
         <Button
           fullWidth
           onClick={() => onConfirm(draft)}
+          disabled={confirming}
         >
-          Confirmar
+          {confirming ? "Guardando..." : "Confirmar"}
         </Button>
       </div>
     </div>

@@ -70,6 +70,7 @@ export const mockInterpretedOperation: InterpretedOperation = {
   tipo_operacion: "venta",
   productos: [
     {
+      id: null,
       nombre: "Gaseosa personal",
       cantidad: 3,
       precio_unitario: 4,

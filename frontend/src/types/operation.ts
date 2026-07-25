@@ -15,7 +15,7 @@ export type OperationType =
   | "pago_deuda";
 
 export interface InterpretedProduct {
-  id?: string;
+  id: number | null;
   nombre: string;
   cantidad: number;
   precio_unitario: number | null;

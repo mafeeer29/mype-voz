@@ -2,8 +2,7 @@ import { useState, useRef, useEffect } from "react";
 import { Send, Mic, Lightbulb } from "lucide-react";
 import { PageContainer } from "../components/layout/PageContainer";
 import { Button } from "../components/common/Button";
-import { useApp } from "../context/AppContext";
-import { formatSoles } from "../utils/currency";
+import { consultarNegocio } from "../services/api";
 
 interface ChatMessage {
   id: number;
@@ -19,7 +18,6 @@ const quickQuestions = [
 ];
 
 export function AssistantPage() {
-  const { summary, products, debts } = useApp();
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
       id: 0,
@@ -28,62 +26,49 @@ export function AssistantPage() {
     },
   ]);
   const [input, setInput] = useState("");
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [recording, setRecording] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
+    scrollRef.current?.scrollTo({
+      top: scrollRef.current.scrollHeight,
+      behavior: "smooth",
+    });
   }, [messages]);
 
-  const buildAnswer = (q: string): string => {
-    if (q.includes("cómo nos fue") || q.includes("Cómo nos fue")) {
-      const bajos = products.filter((p) => p.estado === "stock_bajo");
-      const line = bajos.length
-        ? `La ${bajos[0].nombre.toLowerCase()} está por debajo del stock mínimo.`
-        : "Todos los productos tienen stock suficiente.";
-      return `Hoy vendiste ${formatSoles(summary.ventasTotales)} en total.\n\nRecibiste ${formatSoles(summary.dineroRecibido)} y quedaron ${formatSoles(summary.montoFiado)} pendientes de cobro.\n\nTus gastos fueron ${formatSoles(summary.gastos)}.\n\n${line}`;
-    }
-    if (q.includes("quién") || q.includes("Quién") || q.includes("deben")) {
-      const conDeuda = debts.filter((d) => d.saldo_pendiente > 0);
-      if (conDeuda.length === 0) return "Nadie te debe por ahora. ¡Buen trabajo!";
-      const lista = conDeuda
-        .map((d) => `${d.cliente}: ${formatSoles(d.saldo_pendiente)}`)
-        .join("\n");
-      return `Tienes ${conDeuda.length} cliente(s) con deuda:\n\n${lista}\n\nTotal pendiente: ${formatSoles(conDeuda.reduce((s, d) => s + d.saldo_pendiente, 0))}`;
-    }
-    if (q.includes("stock") || q.includes("poco")) {
-      const bajos = products.filter((p) => p.estado === "stock_bajo");
-      const agotados = products.filter((p) => p.estado === "agotado");
-      if (bajos.length === 0 && agotados.length === 0) {
-        return "Todos tus productos tienen stock suficiente.";
-      }
-      const parts: string[] = [];
-      if (bajos.length) parts.push(`Stock bajo: ${bajos.map((p) => p.nombre).join(", ")}.`);
-      if (agotados.length) parts.push(`Agotados: ${agotados.map((p) => p.nombre).join(", ")}.`);
-      return parts.join("\n\n");
-    }
-    if (q.includes("efectivo")) {
-      return `Deberías tener ${formatSoles(summary.efectivoEsperado)} en efectivo en caja.`;
-    }
-    return "Aún no tengo una respuesta para esa pregunta. Prueba con una de las preguntas sugeridas.";
-  };
-
-  const send = (text: string) => {
-    if (!text.trim()) return;
+  const send = async (text: string) => {
+    if (!text.trim() || sending) return;
     const userMsg: ChatMessage = { id: Date.now(), role: "user", text };
-    const answer = buildAnswer(text);
-    const botMsg: ChatMessage = {
-      id: Date.now() + 1,
-      role: "assistant",
-      text: answer,
-    };
-    setMessages((m) => [...m, userMsg, botMsg]);
+    setMessages((m) => [...m, userMsg]);
     setInput("");
+    setSending(true);
+    setError(null);
+    try {
+      const { respuesta } = await consultarNegocio(text);
+      const botMsg: ChatMessage = {
+        id: Date.now() + 1,
+        role: "assistant",
+        text: respuesta,
+      };
+      setMessages((m) => [...m, botMsg]);
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "No se pudo obtener una respuesta.",
+      );
+    } finally {
+      setSending(false);
+    }
   };
 
   const toggleMic = () => {
     setRecording((r) => !r);
-    if (!recording) setTimeout(() => setRecording(false), 1800);
+    if (!recording) {
+      setTimeout(() => setRecording(false), 1800);
+    }
   };
 
   return (
@@ -114,7 +99,24 @@ export function AssistantPage() {
               </div>
             </div>
           ))}
+          {sending && (
+            <div className="flex justify-start">
+              <div className="rounded-2xl bg-surface-elevated border border-line text-ink-soft rounded-bl-md px-4 py-3 text-sm">
+                <span className="inline-flex gap-1">
+                  <span className="w-2 h-2 rounded-full bg-ink-muted animate-bounce" />
+                  <span className="w-2 h-2 rounded-full bg-ink-muted animate-bounce" style={{ animationDelay: "0.15s" }} />
+                  <span className="w-2 h-2 rounded-full bg-ink-muted animate-bounce" style={{ animationDelay: "0.3s" }} />
+                </span>
+              </div>
+            </div>
+          )}
         </div>
+
+        {error && (
+          <div className="mt-2 rounded-xl border border-red-200 bg-red-50 p-3">
+            <p className="text-sm text-red-700">{error}</p>
+          </div>
+        )}
 
         <div className="mt-3 flex gap-2 overflow-x-auto no-scrollbar">
           {quickQuestions.map((q) => (
@@ -122,7 +124,8 @@ export function AssistantPage() {
               key={q}
               type="button"
               onClick={() => send(q)}
-              className="shrink-0 rounded-full bg-surface-elevated border border-line px-3 py-2 text-xs font-medium text-ink-soft hover:bg-primary-50 hover:border-primary-300 min-h-[36px]"
+              disabled={sending}
+              className="shrink-0 rounded-full bg-surface-elevated border border-line px-3 py-2 text-xs font-medium text-ink-soft hover:bg-primary-50 hover:border-primary-300 min-h-[36px] disabled:opacity-50"
             >
               {q}
             </button>
@@ -149,13 +152,14 @@ export function AssistantPage() {
             onKeyDown={(e) => e.key === "Enter" && send(input)}
             placeholder="Escribe tu pregunta..."
             aria-label="Escribe tu pregunta"
-            className="flex-1 rounded-full border border-line-strong bg-surface-elevated px-4 py-3 text-base text-ink focus:border-primary-500 outline-none"
+            disabled={sending}
+            className="flex-1 rounded-full border border-line-strong bg-surface-elevated px-4 py-3 text-base text-ink focus:border-primary-500 outline-none disabled:opacity-50"
           />
           <Button
             size="md"
             className="rounded-full !px-4"
             onClick={() => send(input)}
-            disabled={!input.trim()}
+            disabled={!input.trim() || sending}
             aria-label="Enviar pregunta"
           >
             <Send size={20} />
