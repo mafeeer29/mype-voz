@@ -15,6 +15,15 @@ import type {
   InterpretedOperation,
   OperationEffect,
 } from "../types/operation";
+import {
+  obtenerInventario,
+  obtenerDeudas,
+  obtenerOperaciones,
+  obtenerResumen,
+  obtenerCaja,
+  type Operation,
+  type BusinessSummary,
+} from "../services/api";
 
 interface AppContextValue {
   activePerson: Registrant;
@@ -30,10 +39,28 @@ interface AppContextValue {
   summary: DailySummary;
   setSummary: React.Dispatch<React.SetStateAction<DailySummary>>;
 
+  operations: Operation[];
+  setOperations: React.Dispatch<React.SetStateAction<Operation[]>>;
+
+  caja: Record<string, number>;
+  setCaja: React.Dispatch<React.SetStateAction<Record<string, number>>>;
+
+  backendSummary: BusinessSummary | null;
+  setBackendSummary: React.Dispatch<
+    React.SetStateAction<BusinessSummary | null>
+  >;
+
   lastResult: OperationResultState | null;
   setLastResult: (r: OperationResultState | null) => void;
 
   applyConfirmedOperation: (op: InterpretedOperation) => void;
+
+  refreshAll: () => Promise<void>;
+  refreshInventory: () => Promise<void>;
+  refreshDebts: () => Promise<void>;
+  refreshOperations: () => Promise<void>;
+  refreshSummary: () => Promise<void>;
+  refreshCaja: () => Promise<void>;
 }
 
 export interface OperationResultState {
@@ -49,10 +76,58 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [products, setProducts] = useState<Product[]>(mockProducts);
   const [debts, setDebts] = useState<Debt[]>(mockDebts);
   const [summary, setSummary] = useState<DailySummary>(mockDailySummary);
+  const [operations, setOperations] = useState<Operation[]>([]);
+  const [caja, setCaja] = useState<Record<string, number>>({});
+  const [backendSummary, setBackendSummary] =
+    useState<BusinessSummary | null>(null);
   const [lastResult, setLastResult] = useState<OperationResultState | null>(
     null,
   );
 
+  const refreshInventory = useCallback(async () => {
+    const data = await obtenerInventario();
+    setProducts(data as Product[]);
+  }, [setProducts]);
+
+  const refreshDebts = useCallback(async () => {
+    const data = await obtenerDeudas();
+    setDebts(data);
+  }, [setDebts]);
+
+  const refreshOperations = useCallback(async () => {
+    const data = await obtenerOperaciones();
+    setOperations(data);
+  }, [setOperations]);
+
+  const refreshSummary = useCallback(async () => {
+    const data = await obtenerResumen();
+    setBackendSummary(data);
+  }, [setBackendSummary]);
+
+  const refreshCaja = useCallback(async () => {
+    const data = await obtenerCaja();
+    setCaja(data);
+  }, [setCaja]);
+
+  const refreshAll = useCallback(async () => {
+    await Promise.all([
+      refreshInventory(),
+      refreshDebts(),
+      refreshOperations(),
+      refreshSummary(),
+      refreshCaja(),
+    ]);
+  }, [
+    refreshInventory,
+    refreshDebts,
+    refreshOperations,
+    refreshSummary,
+    refreshCaja,
+  ]);
+
+  // Se conserva para compatibilidad con el flujo existente.
+  // En la integración real, las páginas usan confirmarOperacion()
+  // del servicio y luego refreshAll().
   const applyConfirmedOperation = useCallback(
     (op: InterpretedOperation) => {
       const efectos: OperationEffect[] = [];
@@ -98,51 +173,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
             descripcion: `Stock de ${updatedProducts[idx].nombre.toLowerCase()}`,
             detalle: `${prev} → ${next}`,
           });
-          if (
-            next < updatedProducts[idx].stock_minimo &&
-            next > 0
-          ) {
+          if (next < updatedProducts[idx].stock_minimo && next > 0) {
             alertas.push(
               `Stock bajo: quedan ${next} ${updatedProducts[idx].nombre.toLowerCase()}. El stock mínimo es ${updatedProducts[idx].stock_minimo}.`,
             );
           } else if (next === 0) {
-            alertas.push(
-              `${updatedProducts[idx].nombre} se agotó.`,
-            );
+            alertas.push(`${updatedProducts[idx].nombre} se agotó.`);
           }
         }
       }
       setProducts(updatedProducts);
-
-      const stockBajoCount = updatedProducts.filter(
-        (p) => p.estado === "stock_bajo" || p.estado === "agotado",
-      ).length;
-
-      setSummary((s) => ({
-        ...s,
-        ventasTotales:
-          op.tipo_operacion === "venta" || op.tipo_operacion === "venta_fiada"
-            ? s.ventasTotales + (op.monto_total ?? 0)
-            : s.ventasTotales,
-        gastos:
-          op.tipo_operacion === "gasto" ||
-          op.tipo_operacion === "compra_mercaderia"
-            ? s.gastos + (op.monto_total ?? 0)
-            : s.gastos,
-        dineroRecibido:
-          op.tipo_operacion === "venta"
-            ? s.dineroRecibido + op.monto_pagado
-            : s.dineroRecibido,
-        montoFiado:
-          op.monto_fiado > 0
-            ? s.montoFiado + op.monto_fiado
-            : s.montoFiado,
-        efectivoEsperado:
-          op.metodo_pago === "efectivo" && op.tipo_operacion === "venta"
-            ? s.efectivoEsperado + op.monto_pagado
-            : s.efectivoEsperado,
-        productosStockBajo: stockBajoCount,
-      }));
 
       setLastResult({
         mensaje: "Venta registrada correctamente",
@@ -150,7 +190,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         alertas,
       });
     },
-    [products, setProducts, setSummary],
+    [products, setProducts],
   );
 
   const value = useMemo<AppContextValue>(
@@ -164,17 +204,38 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setDebts,
       summary,
       setSummary,
+      operations,
+      setOperations,
+      caja,
+      setCaja,
+      backendSummary,
+      setBackendSummary,
       lastResult,
       setLastResult,
       applyConfirmedOperation,
+      refreshAll,
+      refreshInventory,
+      refreshDebts,
+      refreshOperations,
+      refreshSummary,
+      refreshCaja,
     }),
     [
       activePerson,
       products,
       debts,
       summary,
+      operations,
+      caja,
+      backendSummary,
       lastResult,
       applyConfirmedOperation,
+      refreshAll,
+      refreshInventory,
+      refreshDebts,
+      refreshOperations,
+      refreshSummary,
+      refreshCaja,
     ],
   );
 

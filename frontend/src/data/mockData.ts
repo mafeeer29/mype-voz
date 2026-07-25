@@ -43,9 +43,27 @@ export const mockProducts: Product[] = [
 ];
 
 export const mockDebts: Debt[] = [
-  { id: 1, nombre: "Rosa", saldo: 20, ultimaOperacion: "Hoy" },
-  { id: 2, nombre: "Carlos", saldo: 15, ultimaOperacion: "Ayer" },
-  { id: 3, nombre: "María", saldo: 8, ultimaOperacion: "Hace 3 días" },
+  {
+    id: 1,
+    cliente: "Rosa",
+    monto_original: 20,
+    saldo_pendiente: 20,
+    estado: "pendiente",
+  },
+  {
+    id: 2,
+    cliente: "Carlos",
+    monto_original: 15,
+    saldo_pendiente: 15,
+    estado: "pendiente",
+  },
+  {
+    id: 3,
+    cliente: "María",
+    monto_original: 8,
+    saldo_pendiente: 8,
+    estado: "pendiente",
+  },
 ];
 
 export const mockInterpretedOperation: InterpretedOperation = {

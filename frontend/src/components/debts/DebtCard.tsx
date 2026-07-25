@@ -9,7 +9,7 @@ interface DebtCardProps {
 }
 
 export function DebtCard({ debt, onRegisterPayment }: DebtCardProps) {
-  const initial = debt.nombre.charAt(0).toUpperCase();
+  const initial = debt.cliente.charAt(0).toUpperCase();
 
   return (
     <div className="rounded-2xl bg-surface-elevated border border-line shadow-sm p-4">
@@ -18,13 +18,13 @@ export function DebtCard({ debt, onRegisterPayment }: DebtCardProps) {
           {initial}
         </div>
         <div className="flex-1 min-w-0">
-          <p className="text-base font-semibold text-ink">{debt.nombre}</p>
+          <p className="text-base font-semibold text-ink">{debt.cliente}</p>
           <div className="mt-0.5 flex items-baseline gap-1.5">
             <span className="text-sm text-ink-muted">Debe</span>
-            <CurrencyAmount amount={debt.saldo} tone="negative" />
+            <CurrencyAmount amount={debt.saldo_pendiente} tone="negative" />
           </div>
           <p className="text-xs text-ink-muted mt-0.5">
-            Última operación: {debt.ultimaOperacion}
+            Estado: {debt.estado}
           </p>
         </div>
       </div>

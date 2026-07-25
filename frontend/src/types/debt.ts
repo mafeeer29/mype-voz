@@ -1,14 +1,7 @@
 export interface Debt {
   id: number;
-  nombre: string;
-  saldo: number;
-  ultimaOperacion: string;
-}
-
-export interface PaymentRecord {
-  clienteId: number;
-  clienteNombre: string;
-  monto: number;
-  metodo: string;
-  fecha: string;
+  cliente: string;
+  monto_original: number;
+  saldo_pendiente: number;
+  estado: string;
 }

@@ -9,6 +9,7 @@ interface PaymentModalProps {
   debt: Debt | null;
   onClose: () => void;
   onConfirm: (monto: number, metodo: PaymentMethod) => void;
+  loading?: boolean;
 }
 
 const methods: PaymentMethod[] = ["efectivo", "yape", "plin", "transferencia"];
@@ -27,6 +28,7 @@ export function PaymentModal({
   debt,
   onClose,
   onConfirm,
+  loading = false,
 }: PaymentModalProps) {
   const [monto, setMonto] = useState<string>("");
   const [metodo, setMetodo] = useState<PaymentMethod>("efectivo");
@@ -46,15 +48,20 @@ export function PaymentModal({
       onClose={onClose}
       footer={
         <>
-          <Button variant="outline" fullWidth onClick={onClose}>
+          <Button
+            variant="outline"
+            fullWidth
+            onClick={onClose}
+            disabled={loading}
+          >
             Cancelar
           </Button>
           <Button
             fullWidth
             onClick={handleConfirm}
-            disabled={!monto || Number(monto) <= 0}
+            disabled={!monto || Number(monto) <= 0 || loading}
           >
-            Confirmar
+            {loading ? "Procesando..." : "Confirmar"}
           </Button>
         </>
       }
@@ -71,7 +78,7 @@ export function PaymentModal({
             <input
               id="pay-client"
               type="text"
-              value={debt.nombre}
+              value={debt.cliente}
               readOnly
               className="w-full rounded-xl border border-line bg-surface-alt px-4 py-3 text-base text-ink-soft"
             />
@@ -94,7 +101,7 @@ export function PaymentModal({
               className="w-full rounded-xl border border-line-strong bg-surface-elevated px-4 py-3 text-base text-ink focus:border-primary-500 outline-none"
             />
             <p className="mt-1 text-xs text-ink-muted">
-              Saldo actual: S/ {debt.saldo.toFixed(2)}
+              Saldo actual: S/ {debt.saldo_pendiente.toFixed(2)}
             </p>
           </div>
           <div>

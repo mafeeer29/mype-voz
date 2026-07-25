@@ -44,12 +44,12 @@ export function AssistantPage() {
       return `Hoy vendiste ${formatSoles(summary.ventasTotales)} en total.\n\nRecibiste ${formatSoles(summary.dineroRecibido)} y quedaron ${formatSoles(summary.montoFiado)} pendientes de cobro.\n\nTus gastos fueron ${formatSoles(summary.gastos)}.\n\n${line}`;
     }
     if (q.includes("quién") || q.includes("Quién") || q.includes("deben")) {
-      const conDeuda = debts.filter((d) => d.saldo > 0);
+      const conDeuda = debts.filter((d) => d.saldo_pendiente > 0);
       if (conDeuda.length === 0) return "Nadie te debe por ahora. ¡Buen trabajo!";
       const lista = conDeuda
-        .map((d) => `${d.nombre}: ${formatSoles(d.saldo)}`)
+        .map((d) => `${d.cliente}: ${formatSoles(d.saldo_pendiente)}`)
         .join("\n");
-      return `Tienes ${conDeuda.length} cliente(s) con deuda:\n\n${lista}\n\nTotal pendiente: ${formatSoles(conDeuda.reduce((s, d) => s + d.saldo, 0))}`;
+      return `Tienes ${conDeuda.length} cliente(s) con deuda:\n\n${lista}\n\nTotal pendiente: ${formatSoles(conDeuda.reduce((s, d) => s + d.saldo_pendiente, 0))}`;
     }
     if (q.includes("stock") || q.includes("poco")) {
       const bajos = products.filter((p) => p.estado === "stock_bajo");
