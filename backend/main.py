@@ -156,6 +156,22 @@ class DebtResponse(BaseModel):
     saldo_pendiente: float
     estado: str
 
+class DebtPaymentRequest(BaseModel):
+    monto: float = Field(gt=0)
+    metodo_pago: PaymentMethod
+    registrado_por: str | None = None
+
+
+class DebtPaymentResponse(BaseModel):
+    mensaje: str
+    deuda_id: int
+    cliente: str
+    saldo_anterior: float
+    monto_pagado: float
+    saldo_actual: float
+    estado: str
+    caja: CashEffect
+
 
 class ConfirmOperationResponse(BaseModel):
     mensaje: str
@@ -600,3 +616,110 @@ def obtener_deudas(
         )
         for deuda in deudas
     ]
+
+
+@app.post(
+    "/api/deudas/{deuda_id}/pagar",
+    response_model=DebtPaymentResponse,
+)
+def pagar_deuda(
+    deuda_id: int,
+    pago: DebtPaymentRequest,
+    db: Session = Depends(get_db),
+):
+    deuda = db.get(models.Debt, deuda_id)
+
+    if deuda is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No existe la deuda con ID {deuda_id}.",
+        )
+
+    if deuda.pending_balance <= 0:
+        raise HTTPException(
+            status_code=400,
+            detail="La deuda ya está pagada.",
+        )
+
+    if pago.metodo_pago in {
+        "fiado",
+        "mixto",
+    }:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "El pago de una deuda debe realizarse "
+                "con efectivo, Yape, Plin, tarjeta "
+                "o transferencia."
+            ),
+        )
+
+    if pago.monto > deuda.pending_balance:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"El pago no puede superar el saldo pendiente. "
+                f"Saldo disponible: S/ {deuda.pending_balance:.2f}."
+            ),
+        )
+
+    saldo_anterior_deuda = deuda.pending_balance
+    saldo_anterior_caja = obtener_saldo_caja(
+        db,
+        pago.metodo_pago,
+    )
+
+    try:
+        # Reducir el saldo pendiente de la deuda.
+        deuda.pending_balance -= pago.monto
+
+        if deuda.pending_balance <= 0:
+            deuda.pending_balance = 0
+            deuda.status = "pagada"
+        else:
+            deuda.status = "pendiente"
+
+        # Registrar el dinero recibido en caja.
+        movimiento = models.CashMovement(
+            movement_type="ingreso",
+            payment_method=pago.metodo_pago,
+            amount=pago.monto,
+            description=(
+                f"Pago de deuda de {deuda.customer_name} "
+                f"registrado por "
+                f"{pago.registrado_por or 'usuario'}"
+            ),
+        )
+
+        db.add(movimiento)
+        db.commit()
+        db.refresh(deuda)
+
+    except Exception as error:
+        db.rollback()
+
+        raise HTTPException(
+            status_code=500,
+            detail="No se pudo registrar el pago de la deuda.",
+        ) from error
+
+    efecto_caja = CashEffect(
+        metodo=pago.metodo_pago,
+        saldo_anterior=saldo_anterior_caja,
+        monto_agregado=pago.monto,
+        saldo_actual=(
+            saldo_anterior_caja
+            + pago.monto
+        ),
+    )
+
+    return DebtPaymentResponse(
+        mensaje="Pago registrado correctamente",
+        deuda_id=deuda.id,
+        cliente=deuda.customer_name,
+        saldo_anterior=saldo_anterior_deuda,
+        monto_pagado=pago.monto,
+        saldo_actual=deuda.pending_balance,
+        estado=deuda.status,
+        caja=efecto_caja,
+    )
