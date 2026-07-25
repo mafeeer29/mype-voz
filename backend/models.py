@@ -141,3 +141,61 @@ class Debt(Base):
         onupdate=datetime.now,
         nullable=False,
     )
+
+
+# --------------------------------
+# Tabla del historial de operaciones
+# --------------------------------
+
+class Operation(Base):
+    __tablename__ = "operations"
+
+    id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+        index=True,
+    )
+
+    operation_type: Mapped[str] = mapped_column(
+        String(30),
+        nullable=False,
+        index=True,
+    )
+
+    amount: Mapped[float] = mapped_column(
+        Float,
+        nullable=False,
+        default=0,
+    )
+
+    payment_method: Mapped[str | None] = mapped_column(
+        String(30),
+        nullable=True,
+    )
+
+    customer_name: Mapped[str | None] = mapped_column(
+        String(100),
+        nullable=True,
+    )
+
+    category: Mapped[str | None] = mapped_column(
+        String(50),
+        nullable=True,
+    )
+
+    description: Mapped[str | None] = mapped_column(
+        String(250),
+        nullable=True,
+    )
+
+    registered_by: Mapped[str | None] = mapped_column(
+        String(100),
+        nullable=True,
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.now,
+        nullable=False,
+        index=True,
+    )

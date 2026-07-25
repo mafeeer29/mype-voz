@@ -227,6 +227,17 @@ class MerchandisePurchaseResponse(BaseModel):
     saldo_anterior: float
     saldo_actual: float
 
+class OperationResponse(BaseModel):
+    id: int
+    tipo_operacion: str
+    monto: float
+    metodo_pago: str | None = None
+    cliente: str | None = None
+    categoria: str | None = None
+    descripcion: str | None = None
+    registrado_por: str | None = None
+    fecha: str
+
 
 class ConfirmOperationResponse(BaseModel):
     mensaje: str
@@ -588,6 +599,29 @@ def confirmar_operacion(
                 ),
             )
 
+                # Guardar la operación en el historial.
+        descripcion_productos = ", ".join(
+            (
+                f"{item.cantidad:g} "
+                f"{item.nombre}"
+            )
+            for item in operacion.productos
+        )
+
+        historial = models.Operation(
+            operation_type=operacion.tipo_operacion,
+            amount=operacion.monto_total or 0,
+            payment_method=operacion.metodo_pago,
+            customer_name=operacion.cliente,
+            category=None,
+            description=(
+                f"Venta de {descripcion_productos}"
+            ),
+            registered_by=operacion.registrado_por,
+        )
+
+        db.add(historial)
+
         # Guardar inventario, caja y deuda juntos
         db.commit()
 
@@ -747,6 +781,22 @@ def pagar_deuda(
         )
 
         db.add(movimiento)
+
+        # Guardar el pago de deuda en el historial.
+        historial = models.Operation(
+            operation_type="pago_deuda",
+            amount=pago.monto,
+            payment_method=pago.metodo_pago,
+            customer_name=deuda.customer_name,
+            category=None,
+            description=(
+                f"Pago de deuda de {deuda.customer_name}"
+            ),
+            registered_by=pago.registrado_por,
+        )
+
+        db.add(historial)
+
         db.commit()
         db.refresh(deuda)
 
@@ -830,8 +880,22 @@ def registrar_gasto(
         )
 
         db.add(movimiento)
-        db.commit()
 
+        historial = models.Operation(
+            operation_type="gasto",
+            amount=gasto.monto,
+            payment_method=gasto.metodo_pago,
+            customer_name=None,
+            category=gasto.categoria,
+            description=(
+                gasto.descripcion
+                or f"Gasto de categoría {gasto.categoria}"
+            ),
+            registered_by=gasto.registrado_por,
+        )
+
+        db.add(historial)
+        db.commit()
     except Exception as error:
         db.rollback()
 
@@ -940,6 +1004,30 @@ def registrar_compra_mercaderia(
         )
 
         db.add(movimiento)
+
+        # Guardar la compra de mercadería en el historial.
+        descripcion_productos = ", ".join(
+            (
+                f"{item.cantidad:g} unidades "
+                f"del producto con ID {item.id}"
+            )
+            for item in compra.productos
+        )
+
+        historial = models.Operation(
+            operation_type="compra_mercaderia",
+            amount=compra.monto_total,
+            payment_method=compra.metodo_pago,
+            customer_name=None,
+            category="mercadería",
+            description=(
+                compra.descripcion
+                or f"Compra de {descripcion_productos}"
+            ),
+            registered_by=compra.registrado_por,
+        )
+
+        db.add(historial)
         db.commit()
 
     except HTTPException:
@@ -973,3 +1061,32 @@ def registrar_compra_mercaderia(
         saldo_anterior=saldo_anterior,
         saldo_actual=saldo_actual,
     )
+
+
+@app.get(
+    "/api/operaciones",
+    response_model=list[OperationResponse],
+)
+def obtener_operaciones(
+    db: Session = Depends(get_db),
+):
+    operaciones = (
+        db.query(models.Operation)
+        .order_by(models.Operation.created_at.desc())
+        .all()
+    )
+
+    return [
+        OperationResponse(
+            id=operacion.id,
+            tipo_operacion=operacion.operation_type,
+            monto=operacion.amount,
+            metodo_pago=operacion.payment_method,
+            cliente=operacion.customer_name,
+            categoria=operacion.category,
+            descripcion=operacion.description,
+            registrado_por=operacion.registered_by,
+            fecha=operacion.created_at.isoformat(),
+        )
+        for operacion in operaciones
+    ]
