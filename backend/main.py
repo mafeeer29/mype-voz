@@ -173,6 +173,24 @@ class DebtPaymentResponse(BaseModel):
     caja: CashEffect
 
 
+class ExpenseRequest(BaseModel):
+    monto: float = Field(gt=0)
+    categoria: str = Field(min_length=1)
+    metodo_pago: PaymentMethod
+    descripcion: str | None = None
+    registrado_por: str | None = None
+
+
+class ExpenseResponse(BaseModel):
+    mensaje: str
+    categoria: str
+    descripcion: str | None = None
+    monto: float
+    metodo_pago: str
+    saldo_anterior: float
+    saldo_actual: float
+
+
 class ConfirmOperationResponse(BaseModel):
     mensaje: str
     inventario: list[InventoryEffect]
@@ -722,4 +740,77 @@ def pagar_deuda(
         saldo_actual=deuda.pending_balance,
         estado=deuda.status,
         caja=efecto_caja,
+    )
+
+
+@app.post(
+    "/api/gastos",
+    response_model=ExpenseResponse,
+)
+def registrar_gasto(
+    gasto: ExpenseRequest,
+    db: Session = Depends(get_db),
+):
+    if gasto.metodo_pago in {
+        "fiado",
+        "mixto",
+    }:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "El gasto debe pagarse con efectivo, "
+                "Yape, Plin, tarjeta o transferencia."
+            ),
+        )
+
+    saldo_anterior = obtener_saldo_caja(
+        db,
+        gasto.metodo_pago,
+    )
+
+    if gasto.monto > saldo_anterior:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"No hay saldo suficiente en "
+                f"{gasto.metodo_pago}. "
+                f"Saldo disponible: S/ {saldo_anterior:.2f}."
+            ),
+        )
+
+    try:
+        movimiento = models.CashMovement(
+            movement_type="egreso",
+            payment_method=gasto.metodo_pago,
+            amount=gasto.monto,
+            description=(
+                gasto.descripcion
+                or (
+                    f"Gasto de categoría "
+                    f"{gasto.categoria}"
+                )
+            ),
+        )
+
+        db.add(movimiento)
+        db.commit()
+
+    except Exception as error:
+        db.rollback()
+
+        raise HTTPException(
+            status_code=500,
+            detail="No se pudo registrar el gasto.",
+        ) from error
+
+    saldo_actual = saldo_anterior - gasto.monto
+
+    return ExpenseResponse(
+        mensaje="Gasto registrado correctamente",
+        categoria=gasto.categoria,
+        descripcion=gasto.descripcion,
+        monto=gasto.monto,
+        metodo_pago=gasto.metodo_pago,
+        saldo_anterior=saldo_anterior,
+        saldo_actual=saldo_actual,
     )
