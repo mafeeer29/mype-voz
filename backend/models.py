@@ -1,10 +1,14 @@
-from sqlalchemy.orm import Mapped, mapped_column
-
-from database import Base
 from datetime import datetime
 
 from sqlalchemy import Boolean, DateTime, Float, Integer, String
+from sqlalchemy.orm import Mapped, mapped_column
 
+from database import Base
+
+
+# --------------------------------
+# Tabla de productos e inventario
+# --------------------------------
 
 class Product(Base):
     __tablename__ = "products"
@@ -49,6 +53,11 @@ class Product(Base):
         default=True,
     )
 
+
+# --------------------------------
+# Tabla de movimientos de caja
+# --------------------------------
+
 class CashMovement(Base):
     __tablename__ = "cash_movements"
 
@@ -81,5 +90,54 @@ class CashMovement(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime,
         default=datetime.now,
+        nullable=False,
+    )
+
+
+# --------------------------------
+# Tabla de ventas fiadas y deudas
+# --------------------------------
+
+class Debt(Base):
+    __tablename__ = "debts"
+
+    id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+        index=True,
+    )
+
+    customer_name: Mapped[str] = mapped_column(
+        String(100),
+        nullable=False,
+        index=True,
+    )
+
+    original_amount: Mapped[float] = mapped_column(
+        Float,
+        nullable=False,
+    )
+
+    pending_balance: Mapped[float] = mapped_column(
+        Float,
+        nullable=False,
+    )
+
+    status: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        default="pendiente",
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.now,
+        nullable=False,
+    )
+
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.now,
+        onupdate=datetime.now,
         nullable=False,
     )

@@ -65,22 +65,43 @@ class InterpretedProduct(BaseModel):
     id: int | None = None
     nombre: str
     cantidad: float = Field(gt=0)
-    precio_unitario: float | None = Field(default=None, ge=0)
-    subtotal: float | None = Field(default=None, ge=0)
+    precio_unitario: float | None = Field(
+        default=None,
+        ge=0,
+    )
+    subtotal: float | None = Field(
+        default=None,
+        ge=0,
+    )
 
 
 class InterpretedOperation(BaseModel):
     tipo_operacion: OperationType
-    productos: list[InterpretedProduct] = Field(default_factory=list)
-    monto_total: float | None = Field(default=None, ge=0)
+    productos: list[InterpretedProduct] = Field(
+        default_factory=list,
+    )
+    monto_total: float | None = Field(
+        default=None,
+        ge=0,
+    )
     metodo_pago: PaymentMethod | None = None
     cliente: str | None = None
     categoria_gasto: str | None = None
-    monto_pagado: float = Field(default=0, ge=0)
-    monto_fiado: float = Field(default=0, ge=0)
+    monto_pagado: float = Field(
+        default=0,
+        ge=0,
+    )
+    monto_fiado: float = Field(
+        default=0,
+        ge=0,
+    )
     registrado_por: str | None = None
-    campos_faltantes: list[str] = Field(default_factory=list)
-    advertencias: list[str] = Field(default_factory=list)
+    campos_faltantes: list[str] = Field(
+        default_factory=list,
+    )
+    advertencias: list[str] = Field(
+        default_factory=list,
+    )
 
 
 class InterpretResponse(BaseModel):
@@ -121,10 +142,26 @@ class CashEffect(BaseModel):
     saldo_actual: float
 
 
+class DebtEffect(BaseModel):
+    cliente: str
+    saldo_anterior: float
+    monto_agregado: float
+    saldo_actual: float
+
+
+class DebtResponse(BaseModel):
+    id: int
+    cliente: str
+    monto_original: float
+    saldo_pendiente: float
+    estado: str
+
+
 class ConfirmOperationResponse(BaseModel):
     mensaje: str
     inventario: list[InventoryEffect]
     caja: CashEffect | None = None
+    deuda: DebtEffect | None = None
     alertas: list[str]
 
 
@@ -132,7 +169,9 @@ class ConfirmOperationResponse(BaseModel):
 # Funciones auxiliares
 # -----------------------------
 
-def obtener_estado_stock(producto: models.Product) -> str:
+def obtener_estado_stock(
+    producto: models.Product,
+) -> str:
     if producto.current_stock <= 0:
         return "agotado"
 
@@ -149,7 +188,8 @@ def obtener_saldo_caja(
     movimientos = (
         db.query(models.CashMovement)
         .filter(
-            models.CashMovement.payment_method == metodo_pago
+            models.CashMovement.payment_method
+            == metodo_pago
         )
         .all()
     )
@@ -169,8 +209,27 @@ def obtener_saldo_caja(
     return saldo
 
 
+def obtener_saldo_deuda(
+    db: Session,
+    cliente: str,
+) -> float:
+    deudas = (
+        db.query(models.Debt)
+        .filter(
+            models.Debt.customer_name == cliente,
+            models.Debt.pending_balance > 0,
+        )
+        .all()
+    )
+
+    return sum(
+        deuda.pending_balance
+        for deuda in deudas
+    )
+
+
 # -----------------------------
-# Rutas
+# Rutas generales
 # -----------------------------
 
 @app.get("/")
@@ -186,6 +245,10 @@ def health_check():
         "status": "ok"
     }
 
+
+# -----------------------------
+# Interpretación simulada
+# -----------------------------
 
 @app.post(
     "/api/interpretar",
@@ -222,6 +285,10 @@ def interpretar_operacion(
     )
 
 
+# -----------------------------
+# Inventario
+# -----------------------------
+
 @app.get(
     "/api/inventario",
     response_model=list[ProductResponse],
@@ -250,6 +317,10 @@ def obtener_inventario(
     ]
 
 
+# -----------------------------
+# Confirmación de operaciones
+# -----------------------------
+
 @app.post(
     "/api/operaciones/confirmar",
     response_model=ConfirmOperationResponse,
@@ -264,20 +335,55 @@ def confirmar_operacion(
     }:
         raise HTTPException(
             status_code=400,
-            detail="Por ahora solo se pueden confirmar ventas.",
+            detail=(
+                "Por ahora solo se pueden "
+                "confirmar ventas."
+            ),
         )
 
     if not operacion.productos:
         raise HTTPException(
             status_code=422,
-            detail="La venta debe incluir al menos un producto.",
+            detail=(
+                "La venta debe incluir al menos "
+                "un producto."
+            ),
+        )
+
+    es_venta_fiada = (
+        operacion.tipo_operacion == "venta_fiada"
+        or operacion.metodo_pago == "fiado"
+        or operacion.monto_fiado > 0
+    )
+
+    if es_venta_fiada and not operacion.cliente:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Una venta fiada debe incluir "
+                "el nombre del cliente."
+            ),
+        )
+
+    if (
+        es_venta_fiada
+        and operacion.monto_fiado <= 0
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Una venta fiada debe tener "
+                "un monto fiado mayor que cero."
+            ),
         )
 
     efectos_inventario: list[InventoryEffect] = []
     alertas: list[str] = []
     efecto_caja: CashEffect | None = None
+    efecto_deuda: DebtEffect | None = None
 
     try:
+        # Actualizar inventario
         for item in operacion.productos:
             if item.id is None:
                 raise HTTPException(
@@ -331,8 +437,8 @@ def confirmar_operacion(
             if estado == "stock_bajo":
                 alertas.append(
                     (
-                        f"Stock bajo de {producto.name}: "
-                        f"quedan "
+                        f"Stock bajo de "
+                        f"{producto.name}: quedan "
                         f"{producto.current_stock} "
                         "unidades."
                     )
@@ -343,6 +449,7 @@ def confirmar_operacion(
                     f"{producto.name} se ha agotado."
                 )
 
+        # Registrar ingreso en caja
         if (
             operacion.metodo_pago
             and operacion.metodo_pago != "fiado"
@@ -375,6 +482,42 @@ def confirmar_operacion(
                 ),
             )
 
+        # Registrar deuda
+        if operacion.monto_fiado > 0:
+            if not operacion.cliente:
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        "La operación fiada necesita "
+                        "un cliente."
+                    ),
+                )
+
+            saldo_anterior_deuda = obtener_saldo_deuda(
+                db,
+                operacion.cliente,
+            )
+
+            nueva_deuda = models.Debt(
+                customer_name=operacion.cliente,
+                original_amount=operacion.monto_fiado,
+                pending_balance=operacion.monto_fiado,
+                status="pendiente",
+            )
+
+            db.add(nueva_deuda)
+
+            efecto_deuda = DebtEffect(
+                cliente=operacion.cliente,
+                saldo_anterior=saldo_anterior_deuda,
+                monto_agregado=operacion.monto_fiado,
+                saldo_actual=(
+                    saldo_anterior_deuda
+                    + operacion.monto_fiado
+                ),
+            )
+
+        # Guardar inventario, caja y deuda juntos
         db.commit()
 
     except HTTPException:
@@ -386,16 +529,24 @@ def confirmar_operacion(
 
         raise HTTPException(
             status_code=500,
-            detail="No se pudo confirmar la operación.",
+            detail=(
+                "No se pudo confirmar "
+                "la operación."
+            ),
         ) from error
 
     return ConfirmOperationResponse(
         mensaje="Venta registrada correctamente",
         inventario=efectos_inventario,
         caja=efecto_caja,
+        deuda=efecto_deuda,
         alertas=alertas,
     )
 
+
+# -----------------------------
+# Consulta de caja
+# -----------------------------
 
 @app.get("/api/caja")
 def obtener_caja(
@@ -416,3 +567,36 @@ def obtener_caja(
         )
         for metodo in metodos
     }
+
+
+# -----------------------------
+# Consulta de deudas
+# -----------------------------
+
+@app.get(
+    "/api/deudas",
+    response_model=list[DebtResponse],
+)
+def obtener_deudas(
+    db: Session = Depends(get_db),
+):
+    deudas = (
+        db.query(models.Debt)
+        .filter(models.Debt.pending_balance > 0)
+        .order_by(
+            models.Debt.customer_name,
+            models.Debt.created_at,
+        )
+        .all()
+    )
+
+    return [
+        DebtResponse(
+            id=deuda.id,
+            cliente=deuda.customer_name,
+            monto_original=deuda.original_amount,
+            saldo_pendiente=deuda.pending_balance,
+            estado=deuda.status,
+        )
+        for deuda in deudas
+    ]
