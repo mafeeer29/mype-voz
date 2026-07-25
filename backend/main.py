@@ -190,6 +190,43 @@ class ExpenseResponse(BaseModel):
     saldo_anterior: float
     saldo_actual: float
 
+class MerchandisePurchaseProduct(BaseModel):
+    id: int
+    cantidad: float = Field(gt=0)
+
+
+class MerchandisePurchaseRequest(BaseModel):
+    productos: list[MerchandisePurchaseProduct] = Field(
+        min_length=1,
+    )
+    monto_total: float = Field(gt=0)
+    metodo_pago: PaymentMethod
+    proveedor: str | None = None
+    descripcion: str | None = None
+    registrado_por: str | None = None
+
+
+class InventoryIncreaseEffect(BaseModel):
+    producto: str
+    stock_anterior: float
+    cantidad_agregada: float
+    stock_actual: float
+    stock_minimo: float
+    estado: Literal[
+        "disponible",
+        "stock_bajo",
+        "agotado",
+    ]
+
+
+class MerchandisePurchaseResponse(BaseModel):
+    mensaje: str
+    inventario: list[InventoryIncreaseEffect]
+    metodo_pago: str
+    monto_pagado: float
+    saldo_anterior: float
+    saldo_actual: float
+
 
 class ConfirmOperationResponse(BaseModel):
     mensaje: str
@@ -811,6 +848,128 @@ def registrar_gasto(
         descripcion=gasto.descripcion,
         monto=gasto.monto,
         metodo_pago=gasto.metodo_pago,
+        saldo_anterior=saldo_anterior,
+        saldo_actual=saldo_actual,
+    )
+
+
+@app.post(
+    "/api/compras-mercaderia",
+    response_model=MerchandisePurchaseResponse,
+)
+def registrar_compra_mercaderia(
+    compra: MerchandisePurchaseRequest,
+    db: Session = Depends(get_db),
+):
+    if compra.metodo_pago in {
+        "fiado",
+        "mixto",
+    }:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "La compra debe pagarse con efectivo, "
+                "Yape, Plin, tarjeta o transferencia."
+            ),
+        )
+
+    saldo_anterior = obtener_saldo_caja(
+        db,
+        compra.metodo_pago,
+    )
+
+    if compra.monto_total > saldo_anterior:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"No hay saldo suficiente en "
+                f"{compra.metodo_pago}. "
+                f"Saldo disponible: S/ {saldo_anterior:.2f}."
+            ),
+        )
+
+    efectos_inventario: list[InventoryIncreaseEffect] = []
+
+    try:
+        for item in compra.productos:
+            producto = db.get(
+                models.Product,
+                item.id,
+            )
+
+            if producto is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail=(
+                        f"No existe el producto "
+                        f"con ID {item.id}."
+                    ),
+                )
+
+            stock_anterior = producto.current_stock
+            producto.current_stock += item.cantidad
+
+            estado = obtener_estado_stock(producto)
+
+            efectos_inventario.append(
+                InventoryIncreaseEffect(
+                    producto=producto.name,
+                    stock_anterior=stock_anterior,
+                    cantidad_agregada=item.cantidad,
+                    stock_actual=producto.current_stock,
+                    stock_minimo=producto.minimum_stock,
+                    estado=estado,
+                )
+            )
+
+        movimiento = models.CashMovement(
+            movement_type="egreso",
+            payment_method=compra.metodo_pago,
+            amount=compra.monto_total,
+            description=(
+                compra.descripcion
+                or (
+                    "Compra de mercadería"
+                    + (
+                        f" a {compra.proveedor}"
+                        if compra.proveedor
+                        else ""
+                    )
+                )
+            ),
+        )
+
+        db.add(movimiento)
+        db.commit()
+
+    except HTTPException:
+        db.rollback()
+        raise
+
+    except Exception as error:
+        db.rollback()
+
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "No se pudo registrar "
+                "la compra de mercadería."
+            ),
+        ) from error
+
+    saldo_actual = (
+        saldo_anterior
+        - compra.monto_total
+    )
+
+    return MerchandisePurchaseResponse(
+        mensaje=(
+            "Compra de mercadería "
+            "registrada correctamente"
+        ),
+        inventario=efectos_inventario,
+        metodo_pago=compra.metodo_pago,
+        monto_pagado=compra.monto_total,
         saldo_anterior=saldo_anterior,
         saldo_actual=saldo_actual,
     )
