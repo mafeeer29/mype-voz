@@ -8,6 +8,11 @@ from sqlalchemy.orm import Session
 import models
 from database import Base, engine, get_db
 
+from services.gemma_service import (
+    clasificar_consulta_con_gemma,
+    interpretar_con_gemma,
+)
+
 
 app = FastAPI(
     title="MYPE Voz API",
@@ -378,34 +383,87 @@ def health_check():
 )
 def interpretar_operacion(
     solicitud: InterpretRequest,
+    db: Session = Depends(get_db),
 ):
-    operacion_simulada = InterpretedOperation(
-        tipo_operacion="venta",
-        productos=[
-            InterpretedProduct(
-                id=1,
-                nombre="Gaseosa personal",
-                cantidad=3,
-                precio_unitario=4,
-                subtotal=12,
+    try:
+        datos_interpretados = interpretar_con_gemma(
+            texto=solicitud.texto,
+            registrado_por=solicitud.registrado_por,
+        )
+
+        operacion = InterpretedOperation(
+            **datos_interpretados,
+        )
+
+        for item in operacion.productos:
+            if item.id is not None:
+                continue
+
+            producto_db = (
+                db.query(models.Product)
+                .filter(
+                    models.Product.active.is_(True),
+                    models.Product.name.ilike(
+                        f"%{item.nombre}%"
+                    ),
+                )
+                .first()
             )
-        ],
-        monto_total=12,
-        metodo_pago="yape",
-        cliente=None,
-        categoria_gasto=None,
-        monto_pagado=12,
-        monto_fiado=0,
-        registrado_por=solicitud.registrado_por,
-        campos_faltantes=[],
-        advertencias=[],
-    )
 
-    return InterpretResponse(
-        operacion=operacion_simulada,
-        requiere_confirmacion=True,
-    )
+            if producto_db:
+                item.id = producto_db.id
+                item.nombre = producto_db.name
 
+                if item.precio_unitario is None:
+                    item.precio_unitario = (
+                        producto_db.sale_price
+                    )
+
+                if (
+                    item.subtotal is None
+                    and item.precio_unitario
+                    is not None
+                ):
+                    item.subtotal = (
+                        item.cantidad
+                        * item.precio_unitario
+                    )
+
+            else:
+                operacion.advertencias.append(
+                    (
+                        f"No se encontró "
+                        f"'{item.nombre}' "
+                        "en el inventario."
+                    )
+                )
+
+                operacion.campos_faltantes.append(
+                    (
+                        "producto_no_encontrado:"
+                        f"{item.nombre}"
+                    )
+                )
+
+        return InterpretResponse(
+            operacion=operacion,
+            requiere_confirmacion=True,
+        )
+
+    except ValueError as error:
+        raise HTTPException(
+            status_code=422,
+            detail=str(error),
+        ) from error
+
+    except Exception as error:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                f"No se pudo consultar Gemma: "
+                f"{error}"
+            ),
+        ) from error
 
 # -----------------------------
 # Inventario
@@ -1232,27 +1290,45 @@ def consultar_negocio(
     consulta: NaturalQueryRequest,
     db: Session = Depends(get_db),
 ):
-    pregunta = normalizar_texto(
-        consulta.pregunta
-    )
+    try:
+        clasificacion = clasificar_consulta_con_gemma(
+            consulta.pregunta,
+        )
 
-    operaciones = db.query(
-        models.Operation
-    ).all()
+        intencion = clasificacion["intencion"]
+
+    except Exception as error:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "No se pudo clasificar la consulta "
+                f"con Gemma: {error}"
+            ),
+        ) from error
 
     # -----------------------------
-    # Consulta sobre ventas
+    # Saludo
     # -----------------------------
 
-    if any(
-        palabra in pregunta
-        for palabra in [
-            "vendimos",
-            "ventas",
-            "venta total",
-            "cuanto se vendio",
-        ]
-    ):
+    if intencion == "saludo":
+        return NaturalQueryResponse(
+            respuesta=(
+                "¡Hola! Puedes preguntarme por tus ventas, "
+                "gastos, caja, deudas o inventario."
+            ),
+            tipo_consulta="saludo",
+        )
+
+    # -----------------------------
+    # Ventas
+    # -----------------------------
+
+    if intencion == "consultar_ventas":
+        operaciones = (
+            db.query(models.Operation)
+            .all()
+        )
+
         ventas_totales = sum(
             operacion.amount
             for operacion in operaciones
@@ -1271,18 +1347,15 @@ def consultar_negocio(
         )
 
     # -----------------------------
-    # Consulta sobre gastos
+    # Gastos
     # -----------------------------
 
-    if any(
-        palabra in pregunta
-        for palabra in [
-            "gastamos",
-            "gastos",
-            "cuanto se gasto",
-            "egresos",
-        ]
-    ):
+    if intencion == "consultar_gastos":
+        operaciones = (
+            db.query(models.Operation)
+            .all()
+        )
+
         gastos_totales = sum(
             operacion.amount
             for operacion in operaciones
@@ -1298,18 +1371,10 @@ def consultar_negocio(
         )
 
     # -----------------------------
-    # Consulta sobre caja
+    # Caja
     # -----------------------------
 
-    if any(
-        palabra in pregunta
-        for palabra in [
-            "caja",
-            "dinero disponible",
-            "cuanto dinero hay",
-            "saldo disponible",
-        ]
-    ):
+    if intencion == "consultar_caja":
         metodos = [
             "efectivo",
             "yape",
@@ -1348,18 +1413,10 @@ def consultar_negocio(
         )
 
     # -----------------------------
-    # Consulta sobre deudas
+    # Deudas
     # -----------------------------
 
-    if any(
-        palabra in pregunta
-        for palabra in [
-            "deudas",
-            "fiados",
-            "cuanto deben",
-            "por cobrar",
-        ]
-    ):
+    if intencion == "consultar_deudas":
         deudas = (
             db.query(models.Debt)
             .filter(
@@ -1368,18 +1425,16 @@ def consultar_negocio(
             .all()
         )
 
+        if not deudas:
+            return NaturalQueryResponse(
+                respuesta="No hay deudas pendientes.",
+                tipo_consulta="deudas_pendientes",
+            )
+
         total_deudas = sum(
             deuda.pending_balance
             for deuda in deudas
         )
-
-        if not deudas:
-            return NaturalQueryResponse(
-                respuesta=(
-                    "No hay deudas pendientes."
-                ),
-                tipo_consulta="deudas_pendientes",
-            )
 
         detalle = ", ".join(
             (
@@ -1398,18 +1453,10 @@ def consultar_negocio(
         )
 
     # -----------------------------
-    # Consulta sobre productos agotados
+    # Productos agotados
     # -----------------------------
 
-    if any(
-        palabra in pregunta
-        for palabra in [
-            "agotados",
-            "sin stock",
-            "no queda",
-            "se acabaron",
-        ]
-    ):
+    if intencion == "consultar_agotados":
         productos = (
             db.query(models.Product)
             .filter(
@@ -1421,9 +1468,7 @@ def consultar_negocio(
 
         if not productos:
             return NaturalQueryResponse(
-                respuesta=(
-                    "No hay productos agotados."
-                ),
+                respuesta="No hay productos agotados.",
                 tipo_consulta="productos_agotados",
             )
 
@@ -1441,19 +1486,10 @@ def consultar_negocio(
         )
 
     # -----------------------------
-    # Consulta sobre stock bajo
+    # Stock bajo
     # -----------------------------
 
-    if any(
-        palabra in pregunta
-        for palabra in [
-            "stock bajo",
-            "queda poco",
-            "poco stock",
-            "productos bajos",
-            "reponer",
-        ]
-    ):
+    if intencion == "consultar_stock_bajo":
         productos = (
             db.query(models.Product)
             .filter(
@@ -1492,14 +1528,52 @@ def consultar_negocio(
         )
 
     # -----------------------------
-    # Consulta no reconocida
+    # Inventario general
+    # -----------------------------
+
+    if intencion == "consultar_inventario":
+        productos = (
+            db.query(models.Product)
+            .filter(
+                models.Product.active.is_(True)
+            )
+            .order_by(models.Product.name)
+            .all()
+        )
+
+        if not productos:
+            return NaturalQueryResponse(
+                respuesta=(
+                    "No hay productos registrados "
+                    "en el inventario."
+                ),
+                tipo_consulta="inventario",
+            )
+
+        detalle = ", ".join(
+            (
+                f"{producto.name}: "
+                f"{producto.current_stock:g} unidades"
+            )
+            for producto in productos
+        )
+
+        return NaturalQueryResponse(
+            respuesta=(
+                f"El inventario actual es: {detalle}."
+            ),
+            tipo_consulta="inventario",
+        )
+
+    # -----------------------------
+    # No reconocida
     # -----------------------------
 
     return NaturalQueryResponse(
         respuesta=(
             "Todavía no pude identificar la consulta. "
-            "Puedes preguntar por ventas, gastos, caja, "
-            "deudas, productos agotados o stock bajo."
+            "Puedes preguntarme por ventas, gastos, caja, "
+            "deudas o inventario."
         ),
         tipo_consulta="no_reconocida",
     )
